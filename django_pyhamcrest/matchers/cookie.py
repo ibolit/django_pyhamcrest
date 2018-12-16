@@ -2,12 +2,14 @@ from http.cookies import SimpleCookie
 
 from hamcrest.core.base_matcher import BaseMatcher
 from hamcrest.core.helpers.wrap_matcher import wrap_matcher
+from pyhamcrest_toolbox.multicomponent import (
+    MatcherPlugin,
+    MulticomponentMatcher
+)
+from pyhamcrest_toolbox.util import add_not_to_str, get_mismatch_description
 
-from django_pyhamcrest.bases import ComponentMatcher, MultisegmentMatcher
-from django_pyhamcrest.util import get_mismatch_description, add_not_to_str
 
-
-class BooleanMorselComponentMatcher(ComponentMatcher):
+class BooleanMorselMatcherPlugin(MatcherPlugin):
     field_name = None
 
     def __init__(self, *args, **kwargs):
@@ -30,15 +32,15 @@ class BooleanMorselComponentMatcher(ComponentMatcher):
         mismatch_description.append_text(add_not_to_str(self.field_name, item[self.field_name]))
 
 
-class IsHTTPOnlyMatcher(BooleanMorselComponentMatcher):
+class IsHTTPOnlyMatcher(BooleanMorselMatcherPlugin):
     field_name = "httponly"
 
 
-class IsSecureMatcher(BooleanMorselComponentMatcher):
+class IsSecureMatcher(BooleanMorselMatcherPlugin):
     field_name = "secure"
 
 
-class MaxAgeMatcher(ComponentMatcher):
+class MaxAgeMatcherPlugin(MatcherPlugin):
     def __init__(self, max_age):
         super().__init__()
         self.max_age = wrap_matcher(max_age)
@@ -49,7 +51,8 @@ class MaxAgeMatcher(ComponentMatcher):
 
 
     def describe_to(self, description):
-        description.append_text(" with max-age ").append_description_of(self.max_age)
+        description.append_text(" with max-age ")\
+            .append_description_of(self.max_age)
 
 
     def describe_component_mismatch(self, item, mismatch_description):
@@ -58,7 +61,7 @@ class MaxAgeMatcher(ComponentMatcher):
         ))
 
 
-class ValueMatcher(ComponentMatcher):
+class ValueMatcherPlugin(MatcherPlugin):
     def __init__(self, value):
         super().__init__()
         self.value = wrap_matcher(value)
@@ -78,24 +81,24 @@ class ValueMatcher(ComponentMatcher):
         ))
 
 
-class MorselMatcher(MultisegmentMatcher):
+class MorselMatcher(MulticomponentMatcher):
     def __init__(self, value):
         super().__init__()
-        self.matchers.append(ValueMatcher(value))
+        self.register(ValueMatcherPlugin(value))
 
 
     def is_secure(self, secure=True):
-        self.matchers.append(IsSecureMatcher(secure))
+        self.register(IsSecureMatcher(secure))
         return self
 
 
     def is_httponly(self, httponly=True):
-        self.matchers.append(IsHTTPOnlyMatcher(httponly))
+        self.register(IsHTTPOnlyMatcher(httponly))
         return self
 
 
     def max_age(self, max_age):
-        self.matchers.append(MaxAgeMatcher(max_age))
+        self.register(MaxAgeMatcherPlugin(max_age))
         return self
 
 

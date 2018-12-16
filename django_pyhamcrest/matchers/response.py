@@ -1,20 +1,96 @@
 """This is some module documentation"""
 
 from django.http import HttpResponse
-from hamcrest import anything
-from hamcrest.core.base_matcher import BaseMatcher
 from hamcrest.core.helpers.wrap_matcher import wrap_matcher
 from hamcrest.core.string_description import StringDescription
+from pyhamcrest_toolbox.multicomponent import (
+    MatcherPlugin,
+    MulticomponentMatcher
+)
+from pyhamcrest_toolbox.util import (
+    get_description
+)
+from pyhamcrest_toolbox.wrapper_base import MatcherPluginWrapper
+from pyhamcrest_toolbox.wrappers import InstanceOfPlugin, IsAnythingPlugin
+
+from django_pyhamcrest.matchers.cookie import CookieMatcher
 
 
-class ResponseMatcher(BaseMatcher):
-    """HEllo. let's see if it appears in the doc"""
-    def __init__(self, status_code):
+class HeadersMatcher(MatcherPlugin):
+    def __init__(self, headers_dict):
+        super().__init__()
+        self.headers_ = {
+            key: wrap_matcher(value) for key, value in headers_dict.items()
+        }
         self.errors = []
-        self.status = wrap_matcher(status_code)
-        self.headers_ = {}
-        self.content = None
-        self.content_is_correct = False
+
+
+    def component_matches(self, item):
+        matches = True
+        for header, matcher in self.headers_.items():
+            if not item.has_header(header):
+                matches = False
+                self.errors.append("does not contain header <{}>".format(header))
+            elif not matcher._matches(item[header]):
+                matches = False
+                descr = StringDescription()
+                matcher.describe_mismatch(item[header], descr)
+                self.errors.append("the value for header <{}> was <{}>".format(
+                    header, str(descr)))
+        return matches
+
+
+    def describe_to(self, description):
+        header_descr = [
+            "{}: {}".format(key, get_description(val))
+            for key, val in self.headers_.items()]
+        description.append_text(
+            "with headers: {{{}}}".format(", ".join(header_descr)))
+
+
+    def describe_component_mismatch(self, item, mismatch_description):
+        mismatch_description.append_text(", ".join(self.errors))
+
+
+class StatusMatcher(MatcherPluginWrapper):
+    description_prefix = "with status_code "
+    mismatch_description_prefix = "the status_code "
+
+
+    def convert_item(self, item):
+        return item.status_code
+
+
+class CookieComponentMatcher(MatcherPluginWrapper):
+    description_prefix = "with cookies "
+    mismatch_description_prefix = "the cookies"
+    matcher_class = CookieMatcher
+
+    def convert_item(self, item):
+        return item.cookies
+
+
+class ContentMatcher(MatcherPluginWrapper):
+    description_prefix = "with content "
+    mismatch_description_prefix = "the content "
+
+    def convert_item(self, item):
+        return item.content
+
+
+class ResponseMatcher(MulticomponentMatcher):
+    """HEllo. let's see if it appears in the doc"""
+    def __init__(self):
+        super().__init__()
+        self.register(InstanceOfPlugin(HttpResponse))
+
+
+    def with_status(self, status_code):
+        if status_code is None:
+            self.register(IsAnythingPlugin("with any status_code"))
+        else:
+            self.register(StatusMatcher(status_code))
+        return self
 
 
     def with_headers(self, headers_dict):
@@ -27,9 +103,7 @@ class ResponseMatcher(BaseMatcher):
         By default the values in the dict are wrapped into the `equal_to`
         matcher.
         """
-        self.headers_ = {
-            key: wrap_matcher(value) for key, value in headers_dict.items()
-        }
+        self.register(HeadersMatcher(headers_dict))
         return self
 
 
@@ -41,7 +115,7 @@ class ResponseMatcher(BaseMatcher):
         Matches if the content matches the given matcher. By default, this
         is wrapped into the `equal_to` matcher.
         """
-        self.content = wrap_matcher(content)
+        self.register(ContentMatcher(content))
         return self
 
 
@@ -50,80 +124,32 @@ class ResponseMatcher(BaseMatcher):
 
         :param cookies: a dictionary of {cookie_key: matcher}
         """
-        pass
+        self.register(CookieComponentMatcher(cookies))
+        return self
 
 
-    def _matches(self, item):
-        if not isinstance(item, HttpResponse):
-            self.errors.append("Not an HttpResponse object")
-            return False
-
-        matches = True
-        if not self.status.matches(item.status_code):
-            matches = False
-            self.errors.append("Status code was: <{}>".format(item.status_code))
-
-        if self.headers_:
-            for header, matcher in self.headers_.items():
-                if not item.has_header(header):
-                    matches = False
-                    self.errors.append("Does not contain header <{}>".format(header))
-                elif not matcher._matches(item[header]):
-                    matches = False
-                    descr = StringDescription()
-                    matcher.describe_mismatch(item[header], descr)
-                    self.errors.append("The value for header <{}> {}".format(
-                        header, str(descr)))
-
-        if self.content:
-            self.content_is_correct = self.content._matches(item.content)
-            descr = StringDescription()
-            self.content.describe_mismatch(item.content, descr)
-            self.errors.append("The content {}".format(str(descr)))
-            matches &= self.content_is_correct
-
-        return matches
-
-
-    def describe_to(self, description):
-        description.append_text(
-            "An HttpResponse object with status_code {}".format(
-                self.status))
-        header_descr = []
-
-        if self.headers_:
-            for key, val in self.headers_.items():
-                descr = StringDescription()
-                val.describe_to(descr)
-                header_descr.append("{}: {}".format(key, descr))
-            description.append_list(", with headers: ", ". ", ".", header_descr)
-
-        if self.content:
-            description.append_text(" and content ")
-            description.append_description_of(self.content)
-
-
-    def describe_mismatch(self, item, mismatch_description):
-        errors = ". ".join(self.errors)
-        mismatch_description.append_text(errors).append_text(".")
+def response():
+    return ResponseMatcher()
 
 
 def status(status_=None):
     """Matches if the item is an HttpResponse and has the given status.
     If no parameter is passed, matches any status.
     """
-    if status_ is None:
-        status_ = anything()
-    return ResponseMatcher(status_)
+    return response().with_status(status_)
 
 
 def has_content(content):
     """Matches if the item is an HttpResponse and has the given content
     """
-    return status().with_content(content)
+    return response().with_content(content)
 
 
 def has_headers(headers):
     """Matches if the item is an HttpResponse and has the given headers
     """
-    return status().with_headers(headers)
+    return response().with_headers(headers)
+
+
+def has_cookies(cookies):
+    return response().with_cookies(cookies)
